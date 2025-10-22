@@ -32,6 +32,37 @@ tstop = "06:10:50"   # Stop time of the data block
 #tstop = "06:59:50"   # Stop time of the data block
 
 dir = "/Users/mireland/data/heimdallr/HD222805/"  # Directory containing data files
+
+dir = "/Users/mireland/data/heimdallr/HD5877/"  # Directory containing data files
+
+tstart = "06:10:27"
+tstop = "06:12:29"
+
+tstart = "06:20:21"
+tstop = "06:22:22"
+
+tstart = "06:28:51"
+tstop = "06:30:57"
+
+tstart = "06:33:56"
+tstop = "06:36:07"
+
+tstart = "06:40:36"
+tstop = "06:42:48"
+
+tstart = "06:48:45"
+tstop = "06:49:59"
+
+tstart = "06:54:07"
+tstop = "06:56:09"
+
+tstart = "06:58:49"
+tstop = "07:00:50"
+
+tstart = "06:10:27"
+tstop = "06:12:29"
+
+
 smooth = 25  # Smoothing window size
 gd_smooth = 25  # Smoothing window size for group delay
 gap = 250  # Gap size for dropout detection
@@ -372,7 +403,7 @@ foreground = foreground[gd_smooth:]
 # Find the good frames based on the 3rd lowest GD_phasor value
 gd_mags = np.abs(GD_phasor_smooth)
 third_lowest = np.sort(gd_mags, axis=1)[:,2]
-good_data = np.where(third_lowest > 0.3 * np.mean(third_lowest))[0]
+good_data = np.where(third_lowest > 0.3 * np.mean(third_lowest[:foreground[0]]))[0]
 
 # Plot the GD phasor third_lowest and high_GD for inspection,
 # marking the foreground and good data regions.
