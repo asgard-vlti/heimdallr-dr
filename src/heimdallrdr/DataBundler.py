@@ -19,6 +19,12 @@ class DataBundler:
         """
         self.base_path = pathlib.Path(base_path)
 
+    def _coerce_utc_naive(self, value):
+        """Convert datetimes to naive UTC for internal comparisons."""
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
     def _extract_camera_settings(self, header):
         """Extract camera settings used to check consistency across files.
 
@@ -53,8 +59,8 @@ class DataBundler:
 
         Parameters
         ----------
-        settings_by_file : list[tuple[pathlib.Path, dict]]
-            Per-file camera settings for files that contributed data.
+        settings_by_file : list[tuple[datetime.datetime, dict]]
+            Per-file camera settings keyed by cube start time.
         """
         if not settings_by_file:
             return
@@ -151,6 +157,8 @@ class DataBundler:
 
     def _validate_time_range(self, start_time, end_time):
         """Validate that ``start_time`` and ``end_time`` define a non-empty range."""
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
         if end_time <= start_time:
             raise ValueError("end_time must be after start_time.")
 
@@ -185,6 +193,8 @@ class DataBundler:
         """
         root = self._resolve_root()
         pth = self.base_path
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
 
         relevant_dirs = list(self._iter_relevant_date_dirs(root, start_time, end_time))
         if not relevant_dirs and pth.is_dir():
@@ -229,11 +239,15 @@ class DataBundler:
         overlap_plan : list[tuple]
             Entries ``(file_time, file, start_idx, end_idx, fps)`` sorted by
             ``file_time``.
-        settings_by_file : list[tuple[pathlib.Path, dict]]
-            Camera settings for files that contribute overlap.
+        settings_by_file : list[tuple[datetime.datetime, dict]]
+            Camera settings for files that contribute overlap, keyed by cube
+            start time.
         """
         overlap_plan = []
         settings_by_file = []
+
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
 
         for file_time, file in self._iter_candidate_files(crop, start_time, end_time):
             try:
@@ -269,7 +283,7 @@ class DataBundler:
                         continue
 
                     start_idx, end_idx = overlap
-                    settings_by_file.append((file, settings))
+                    settings_by_file.append((file_time, settings))
                     overlap_plan.append((file_time, file, start_idx, end_idx, fps))
             except Exception as e:
                 print(f"Error loading {file}: {e}")
@@ -296,6 +310,9 @@ class DataBundler:
             ``frames``.
         """
         self._validate_time_range(start_time, end_time)
+
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
 
         overlap_plan, settings_by_file = self._build_overlap_plan(
             crop, start_time, end_time
@@ -365,6 +382,9 @@ class DataBundler:
         """
         self._validate_time_range(start_time, end_time)
 
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
+
         overlap_plan, settings_by_file = self._build_overlap_plan(
             crop, start_time, end_time
         )
@@ -418,3 +438,24 @@ class DataBundler:
         frame_times = np.concatenate(frame_times_chunks)
         results = np.concatenate(results_chunks)
         return times_used, frame_times, results
+
+    def load_camera_settings(
+        self, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
+        """Load camera settings for files overlapping a time range.
+
+        Returns
+        -------
+        settings_by_file : list[tuple[datetime.datetime, dict]]
+            Camera settings for files that overlap the requested range,
+            keyed by cube start time.
+        """
+        start_time = self._coerce_utc_naive(start_time)
+        end_time = self._coerce_utc_naive(end_time)
+
+        _, settings_by_file = self._build_overlap_plan(
+            crop="baldr1",  # note that crop is irrelevant here since all crops share the same camera
+            start_time=start_time,
+            end_time=end_time,
+        )
+        return settings_by_file

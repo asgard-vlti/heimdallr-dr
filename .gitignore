@@ -1,0 +1,8 @@
+*.npy
+
+.github/
+
+__pycache__/
+
+*.egg-info/
+*.csv
