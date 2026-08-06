@@ -276,6 +276,7 @@ def load_ttmet(fname, start_time=None, end_time=None):
     df = pd.DataFrame(data)
     return df
 
+
 # base = pathlib.Path("/media/taras/T7/work/Asgard/Apr2026")
 
 # ttmet_fname = "btt_performance_minimal.log"
@@ -301,7 +302,7 @@ target_times = {
         "2026-04-04" + "02:35:40",
     ],
     "HD 103862": [
-        "2026-04-04" + "02:46:14",
+        "2026-04-04" + "02:35:14",
         "2026-04-04" + "03:23:09",
     ],
     "Quasar": [
@@ -328,8 +329,13 @@ for target, (start_str, end_str) in target_times.items():
 
 target = "SMS_HD"
 # %%
-ttmet_fname = "btt_performance_beam1_20260403T232829.log"
-pth = pathlib.Path(__file__).parent / "data"
+
+base = pathlib.Path("/media/taras/T7/work/Asgard/Apr2026")
+
+beam = 1
+
+ttmet_fname = f"btt_performance_beam{beam}_20260403T232829.log"
+pth = base / "20260403"
 
 ttmet = load_ttmet(
     pth / ttmet_fname,
@@ -337,13 +343,13 @@ ttmet = load_ttmet(
     end_time=target_times[target][1],
 )
 # %%
-settings_fname = "btt_beam1_settings_20260403T232829.log"
+settings_fname = f"btt_beam{beam}_settings_20260403T232829.log"
 
 settings = load_ttsettings(pth / settings_fname)
 # %%
 print(f"Loaded all data")
 print(f"Settings times: {settings['time'].min()} to {settings['time'].max()}")
-print(f"TTMET times: {ttmet['time'].min()} to {ttmet['time'].max()}")
+print(f"TTMET times   : {ttmet['time'].min()} to {ttmet['time'].max()}")
 
 # %%
 
@@ -450,9 +456,10 @@ plt.legend()
 # instead of using std, use percentiles and convert to sigma
 total_dev = np.sqrt(tx_demeaned**2 + ty_demeaned**2)
 # use 90-10 percentiles and 2.563 conversion factor
-p90 = np.percentile(total_dev, 90)
-p10 = np.percentile(total_dev, 10)
-rms = (p90 - p10) / 2.563
+# p90 = np.percentile(total_dev, 90)
+# p10 = np.percentile(total_dev, 10)
+# rms = (p90 - p10) / 2.563
+rms = np.percentile(total_dev, 50.0)
 
 
 import astropy.units as u
@@ -462,10 +469,10 @@ import astropy.units as u
 # airy_ring_radius = 26.96 * u.um  # at J band
 # # need to convert this to mas and get the plate scale in mas/pix to convert to pixels
 
-# wavel = 1.25 * u.um  # J band
-# D = 8.1 * u.m
+wavel = 1.25 * u.um  # J band
+D = 8.1 * u.m
 
-# lam_over_D = (wavel / D).to(u.arcsec, equivalencies=u.dimensionless_angles())
+lam_over_D = (wavel / D).to(u.arcsec, equivalencies=u.dimensionless_angles())
 
 # # one airy ring radius is equivalent to 1.22 * lam_over_D, so we can compute the plate scale as:
 # plate_scale = 1.22 * lam_over_D.to(u.arcsec) / (airy_ring_radius / pixel_size)
@@ -496,8 +503,69 @@ fps = 1 / np.median(
 print(f"Estimated frame rate: {fps:.2f} Hz")
 
 # PSD of each
-plt.psd(mx_demeaned, Fs=fps, NFFT=256, label="mx")
-plt.psd(my_demeaned, Fs=fps, NFFT=256, label="my")
+plt.psd(tx_demeaned, Fs=fps, NFFT=256, label="x")
+plt.psd(ty_demeaned, Fs=fps, NFFT=256, label="y")
 plt.legend()
 
 # %%
+fig, axs = plt.subplots(1, 2, figsize=(10, 3))
+
+px_to_mas = 13.0
+
+# first shows hist, second shows psd
+axs[0].hist(
+    tx_demeaned * px_to_mas,
+    bins=np.arange(tx_demeaned.min(), tx_demeaned.max(), 0.01) * px_to_mas,
+    alpha=0.5,
+    label="x",
+)
+axs[0].hist(
+    ty_demeaned * px_to_mas,
+    bins=np.arange(ty_demeaned.min(), ty_demeaned.max(), 0.01) * px_to_mas,
+    alpha=0.5,
+    label="y",
+)
+axs[0].legend()
+axs[0].set_xlabel("Tip/Tilt residual (mas)")
+axs[0].set_ylabel("Counts")
+axs[0].set_xlim(-3 * px_to_mas, 3 * px_to_mas)
+# overlay a gaussian fit to the histograms
+from scipy.stats import norm
+
+x_fit = norm.fit(tx_demeaned)
+y_fit = norm.fit(ty_demeaned)
+
+axs[0].plot(
+    np.linspace(tx_demeaned.min(), tx_demeaned.max(), 1000) * px_to_mas,
+    norm.pdf(np.linspace(tx_demeaned.min(), tx_demeaned.max(), 1000), *x_fit)
+    * len(tx_demeaned)
+    * 0.01,
+    label="x fit",
+    color="C0",
+)
+axs[0].plot(
+    np.linspace(ty_demeaned.min(), ty_demeaned.max(), 1000) * px_to_mas,
+    norm.pdf(np.linspace(ty_demeaned.min(), ty_demeaned.max(), 1000), *y_fit)
+    * len(ty_demeaned)
+    * 0.01,
+    label="y fit",
+    color="C1",
+)
+axs[0].legend()
+
+# psds
+axs[1].psd(tx_demeaned * px_to_mas, Fs=fps, NFFT=256, label="x")
+axs[1].psd(ty_demeaned * px_to_mas, Fs=fps, NFFT=256, label="y")
+axs[1].legend()
+
+plt.savefig(f"tiptilt_analysis_beam{beam}_{target}.pdf", dpi=300, bbox_inches="tight")
+
+# combined rms of the two fits
+combined_stddev = np.sqrt(x_fit[1] ** 2 + y_fit[1] ** 2)
+combined_rms_mas = (combined_stddev * px_to_mas * u.mas).to(u.mas)
+combined_rms_rad = combined_rms_mas / lam_over_D
+combined_rms_nm = (combined_rms_rad * wavel / (2 * np.pi)).to(u.nm)
+
+print(f"Combined RMS in pixels: {combined_stddev:.3f} pix")
+print(f"Combined RMS in mas: {combined_rms_mas:.3f}")
+print(f"Combined RMS in nm: {combined_rms_nm:.3f}")
