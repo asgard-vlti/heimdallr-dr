@@ -390,6 +390,8 @@ def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = N
                          ft2[q1_K2[i], p1_K2[i]]*(dp_K2[i])*(dq_K2[i])
             V2[count, i] /= ft2[szx//2, szy//2]
 
+    #import pdb; pdb.set_trace()
+
     # Compute V^2. 
     V2_1 = np.abs(V1)**2
     V2_2 = np.abs(V2)**2
