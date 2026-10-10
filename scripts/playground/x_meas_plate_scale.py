@@ -46,8 +46,8 @@ bad_pixel_mask = np.sum(data > threshold, axis=0) > (0.1 * data.shape[0])
 plt.imshow(bad_pixel_mask)
 
 # %%
-# plt.imshow(data.mean(axis=0)*(~bad_pixel_mask), vmin=1000)
-plt.imshow(data[300_006]*(~bad_pixel_mask), vmin=1000)
+plt.imshow(data.mean(axis=0)*(~bad_pixel_mask), vmin=1000)
+# plt.imshow(data[300_000]*(~bad_pixel_mask), vmin=1000)
 
 # beam1 by eye
 primary = np.array([14.0,18.5])
@@ -57,8 +57,8 @@ secondary = np.array([23.0,14.8])
 primary = np.array([14.0,18.5])
 secondary = np.array([23.0,14.8])
 
-plt.scatter(primary[0], primary[1], color="red", marker="x")
-plt.scatter(secondary[0], secondary[1], color="red", marker="x")
+# plt.scatter(primary[0], primary[1], color="red", marker="x")
+# plt.scatter(secondary[0], secondary[1], color="red", marker="x")
 # plt.imshow(data[100])
 
 pix_distance = np.linalg.norm(primary - secondary)
