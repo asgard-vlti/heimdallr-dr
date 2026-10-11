@@ -348,8 +348,8 @@ run_metrics = plot_mode_mega(
     "exploration",
 )
 
-def plot_pd_tel_psd(ax, rows, discard_samples, title):
-    psd_rows = rows.iloc[discard_samples:]
+def plot_pd_tel_psd(ax, rows, discard_samples, title, end_sample=None):
+    psd_rows = rows.iloc[discard_samples:end_sample]
     pd_tel_psd = ft_perf.measurement_array(psd_rows, "pd_tel")
     sample_intervals = psd_rows["time"].diff().dt.total_seconds().iloc[1:]
     sampling_hz = 1.0 / sample_intervals.median()
@@ -404,11 +404,16 @@ def plot_best_run_psds(
         )
         ax_time.legend(ncol=4)
 
+        psd_end = bump["onset"] if bump is not None else None
+        psd_title = f"PSD after discarding {discard_samples:,} {discard_reason} samples"
+        if psd_end is not None:
+            psd_title += "; detected bump and later samples excluded"
         plot_pd_tel_psd(
             ax_psd,
             rows,
             discard_samples,
-            f"PSD after discarding {discard_samples:,} {discard_reason} samples",
+            psd_title,
+            end_sample=psd_end,
         )
         rms_label = (
             mode_1_rms_label(mean_rms_nm, bump)
