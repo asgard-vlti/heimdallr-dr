@@ -22,6 +22,24 @@ class FTPerformanceBundler:
     )
     CHUNK_ROWS = 250_000
     TIMESTAMP_COLUMN = "timestamp"
+    MEASUREMENT_WIDTHS = {
+        "gd_snr": 6,
+        "pd_snr": 6,
+        "gd_bl": 6,
+        "pd_tel": 4,
+        "gd_tel": 4,
+        "dm_piston": 4,
+    }
+    TRAILING_COLUMNS = ("cnt", "seq", "servo_mode")
+
+    @classmethod
+    def _base_columns(cls):
+        measurements = tuple(
+            f"{name}_{i}"
+            for name, width in cls.MEASUREMENT_WIDTHS.items()
+            for i in range(1, width + 1)
+        )
+        return (cls.TIMESTAMP_COLUMN, *measurements)
 
     @staticmethod
     def _file_datetime_from_name(fp: pathlib.Path):
@@ -126,6 +144,8 @@ class FTPerformanceBundler:
 
     @classmethod
     def _header_columns_from_comment(cls, fp: pathlib.Path):
+        base_columns = cls._base_columns()
+        group_names = (cls.TIMESTAMP_COLUMN, *cls.MEASUREMENT_WIDTHS)
         with fp.open("r") as fh:
             for ln in fh:
                 s = ln.strip()
@@ -142,19 +162,21 @@ class FTPerformanceBundler:
                 if not tokens:
                     continue
 
-                if tokens[0].lower() != cls.TIMESTAMP_COLUMN:
+                if (
+                    tuple(token.lower() for token in tokens[: len(group_names)])
+                    != group_names
+                ):
                     continue
 
-                columns = []
-                for token in tokens:
+                trailing_columns = []
+                for token in tokens[len(group_names) :]:
                     if token.startswith("("):
                         break
-                    columns.append(token)
+                    trailing_columns.append(token)
 
-                if columns:
-                    return tuple(columns)
+                return (*base_columns, *trailing_columns)
 
-        return (cls.TIMESTAMP_COLUMN,)
+        return base_columns
 
     @classmethod
     def _infer_columns(cls, fp: pathlib.Path):
@@ -166,11 +188,18 @@ class FTPerformanceBundler:
 
         data_count = len(first_data_line.split())
         if data_count <= len(header_columns):
-            return header_columns[:data_count]
+            return header_columns
 
-        extra_count = data_count - len(header_columns)
-        extra_columns = tuple(f"aux_{i:02d}" for i in range(1, extra_count + 1))
-        return header_columns + extra_columns
+        base_count = len(cls._base_columns())
+        extra_columns = []
+        for position in range(len(header_columns) - base_count, data_count - base_count):
+            if position < len(cls.TRAILING_COLUMNS):
+                extra_columns.append(cls.TRAILING_COLUMNS[position])
+            else:
+                extra_columns.append(
+                    f"aux_{position - len(cls.TRAILING_COLUMNS) + 1:02d}"
+                )
+        return header_columns + tuple(extra_columns)
 
     @classmethod
     def _file_time_bounds(cls, fp: pathlib.Path):
@@ -196,10 +225,9 @@ class FTPerformanceBundler:
         """
         Parse Heimdallr performance logs under ``path``.
 
-        The expected layout is ``base/YYYYMMDD/ft_perf_YYYYMMDDTHHMMSS.log``.
-        The first data column is a timestamp; later columns are preserved and
-        named from the comment header when present, with ``aux_XX`` names added
-        for unnamed trailing values.
+        The first data column is a timestamp, followed by six values for each
+        baseline measurement and four for each telescope measurement. Newer
+        logs also include ``cnt``, ``seq``, and ``servo_mode`` values.
         """
         p = pathlib.Path(path)
         self.path = p
@@ -311,3 +339,23 @@ class FTPerformanceBundler:
         total_seconds = max(1.0, (end_time - start_time).total_seconds())
         frac_covered = min(1.0, float(df.shape[0]) / float(total_seconds))
         return df, frac_covered
+
+    @classmethod
+    def measurement_array(cls, df: pd.DataFrame, measurement: str):
+        """Return group values aligned with ``df['time']`` as a numeric array.
+
+        Nonnumeric values become NaN.
+        """
+        if measurement not in cls.MEASUREMENT_WIDTHS:
+            raise ValueError(f"Unknown measurement group: {measurement}")
+
+        columns = [
+            f"{measurement}_{i}"
+            for i in range(1, cls.MEASUREMENT_WIDTHS[measurement] + 1)
+        ]
+        missing = [column for column in columns if column not in df.columns]
+        if missing and not df.empty:
+            raise KeyError(f"Missing measurement columns: {', '.join(missing)}")
+
+        values = df.reindex(columns=columns).apply(pd.to_numeric, errors="coerce")
+        return values.to_numpy(dtype=float)

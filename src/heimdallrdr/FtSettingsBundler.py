@@ -177,9 +177,10 @@ class FTSettingsBundler:
         """
         Parse Heimdallr fringe-tracker settings logs under ``path``.
 
-        The expected layout is ``base/YYYYMMDD/ft_settings_YYYYMMDDTHHMMSS.log``.
-        Each file is treated as a single settings stream with a header comment
-        describing the columns and timestamp values in the first column.
+        ``path`` may be a single ``ft_settings_*.log`` file or a directory
+        containing such files. Each file is treated as a single settings stream
+        with a header comment describing the columns and timestamp values in
+        the first column.
         """
         p = pathlib.Path(path)
         self.path = p
@@ -187,28 +188,36 @@ class FTSettingsBundler:
         pattern = re.compile(r"ft_settings_(\d{8}T\d{6})\.log$")
         self.files = []
 
-        if p.exists():
-            for fp in p.rglob("*.log"):
-                if not pattern.search(fp.name):
-                    continue
+        if p.is_file():
+            paths = (p,)
+        elif p.is_dir():
+            paths = p.rglob("*.log")
+        else:
+            paths = ()
+        for fp in paths:
+            if not pattern.fullmatch(fp.name):
+                continue
 
-                start_dt, end_dt = self._file_time_bounds(fp)
-                columns = self._file_columns_from_header(fp)
+            start_dt, end_dt = self._file_time_bounds(fp)
+            columns = self._file_columns_from_header(fp)
 
-                self.files.append(
-                    FringeSettingsFile(
-                        path=fp,
-                        start_time=start_dt,
-                        end_time=end_dt,
-                        columns=columns,
-                    )
+            self.files.append(
+                FringeSettingsFile(
+                    path=fp,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    columns=columns,
                 )
+            )
 
         self.files.sort(
             key=lambda x: x.start_time
             or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
         )
-        self.columns = self.files[0].columns if self.files else self.DEFAULT_COLUMNS
+        columns = ["timestamp"]
+        for sf in self.files:
+            columns.extend(col for col in sf.columns[1:] if col not in columns)
+        self.columns = tuple(columns) if self.files else self.DEFAULT_COLUMNS
 
     def get_settings_between(
         self,
@@ -260,7 +269,7 @@ class FTSettingsBundler:
         if not rows:
             return pd.DataFrame(columns=("time", *self.columns[1:])), 0.0
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows, columns=("time", *self.columns[1:]))
         df = df.sort_values("time").reset_index(drop=True)
         df["time"] = pd.to_datetime(df["time"], utc=True)
 
