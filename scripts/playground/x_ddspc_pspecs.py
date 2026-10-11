@@ -171,6 +171,72 @@ def mean_pd_tel_rms_nm(values, discard_samples):
     return onp.nanmean(telescope_rms_waves) * k1_wavelength_um * 1_000
 
 
+def detect_pd_tel_3_bump(rows, values, discard_samples):
+    sampling_hz = 1.0 / rows["time"].diff().dt.total_seconds().iloc[1:].median()
+    smooth_samples = max(3, round(0.5 * sampling_hz))
+    sustained_samples = max(1, round(0.25 * sampling_hz))
+    smoothed = (
+        pd.Series(values[:, 2])
+        .rolling(smooth_samples, center=True, min_periods=smooth_samples // 2)
+        .mean()
+        .to_numpy()
+    )
+    baseline_samples = smoothed[discard_samples : len(smoothed) // 2]
+    baseline = onp.nanmedian(baseline_samples)
+    baseline_mad = onp.nanmedian(onp.abs(baseline_samples - baseline))
+    threshold = max(0.01, 6 * 1.4826 * baseline_mad)
+    away_from_baseline = onp.abs(smoothed - baseline) > threshold
+    sustained = (
+        pd.Series(away_from_baseline)
+        .rolling(sustained_samples, min_periods=sustained_samples)
+        .sum()
+        .to_numpy()
+    )
+    search_start = max(discard_samples, len(smoothed) // 2)
+    detected = onp.flatnonzero(
+        (onp.arange(len(smoothed)) >= search_start + sustained_samples - 1)
+        & (sustained >= sustained_samples)
+    )
+    onset = int(detected[0] - sustained_samples + 1) if len(detected) else None
+    pre_bump_rms_nm = (
+        mean_pd_tel_rms_nm(values[:onset], discard_samples)
+        if onset is not None
+        else None
+    )
+    return {
+        "onset": onset,
+        "smoothed": smoothed,
+        "pre_bump_rms_nm": pre_bump_rms_nm,
+    }
+
+
+def plot_pd_tel_3_bump(ax, rows, bump):
+    ax.plot(
+        rows["time"],
+        bump["smoothed"],
+        color="black",
+        linewidth=1.2,
+        label="pd_tel_3 (0.5 s mean)",
+    )
+    if bump["onset"] is not None:
+        ax.axvline(
+            rows["time"].iloc[bump["onset"]],
+            color="magenta",
+            linestyle="--",
+            linewidth=1.4,
+            label="Detected bump onset",
+        )
+
+
+def mode_1_rms_label(full_rms_nm, bump):
+    if bump["onset"] is None:
+        return f"Full mean RMS {full_rms_nm:.0f} nm; no sustained pd_tel_3 bump detected"
+    return (
+        f"Full mean RMS {full_rms_nm:.0f} nm; "
+        f"before bump {bump['pre_bump_rms_nm']:.0f} nm"
+    )
+
+
 fig, ax = plt.subplots(figsize=(14, 4), constrained_layout=True)
 plot_pd_tel(ax, performance_run)
 ax.set_title("PD telescope values during the longest servo_mode=5 run")
@@ -207,7 +273,13 @@ def find_mode_runs(performance, servo_mode, min_samples):
 
 
 def plot_mode_mega(
-    performance, servo_mode, run_bounds, min_samples, discard_samples, discard_reason
+    performance,
+    servo_mode,
+    run_bounds,
+    min_samples,
+    discard_samples,
+    discard_reason,
+    bump_results=None,
 ):
     if not run_bounds:
         raise ValueError(
@@ -229,14 +301,22 @@ def plot_mode_mega(
         rows = performance.iloc[start : end + 1]
         values = plot_pd_tel(ax, rows)
         mean_rms_nm = mean_pd_tel_rms_nm(values, discard_samples)
+        bump = bump_results.get(number) if bump_results is not None else None
+        if bump is not None:
+            plot_pd_tel_3_bump(ax, rows, bump)
         if onp.isfinite(mean_rms_nm):
             run_metrics.append((mean_rms_nm, number, start, end))
         start_local = rows["time"].iloc[0].tz_convert(local_tz)
         end_local = rows["time"].iloc[-1].tz_convert(local_tz)
+        rms_label = (
+            mode_1_rms_label(mean_rms_nm, bump)
+            if bump is not None
+            else f"Mean RMS: {mean_rms_nm:.0f} nm"
+        )
         ax.set_title(
             f"{number}. {start_local:%H:%M:%S}–{end_local:%H:%M:%S} "
-            f"({len(rows):,} samples)\nMean RMS after {discard_samples:,} "
-            f"{discard_reason} samples: {mean_rms_nm:.0f} nm",
+            f"({len(rows):,} samples)\n{rms_label} "
+            f"(after {discard_samples:,} {discard_reason} samples)",
             fontsize=10,
         )
         ax.tick_params(axis="x", labelrotation=30, labelsize=8)
@@ -268,9 +348,40 @@ run_metrics = plot_mode_mega(
     "exploration",
 )
 
+def plot_pd_tel_psd(ax, rows, discard_samples, title):
+    psd_rows = rows.iloc[discard_samples:]
+    pd_tel_psd = ft_perf.measurement_array(psd_rows, "pd_tel")
+    sample_intervals = psd_rows["time"].diff().dt.total_seconds().iloc[1:]
+    sampling_hz = 1.0 / sample_intervals.median()
+    nfft = min(4096, 2 ** int(onp.log2(len(psd_rows))))
+
+    plt.sca(ax)
+    for telescope in range(pd_tel_psd.shape[1]):
+        plt.psd(
+            pd_tel_psd[:, telescope],
+            NFFT=nfft,
+            Fs=sampling_hz,
+            noverlap=nfft // 2,
+            detrend="mean",
+            scale_by_freq=True,
+            label=f"pd_tel_{telescope + 1}",
+        )
+    ax.set_title(title)
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("PSD (dB K1 waves²/Hz)")
+    ax.legend(ncol=4)
+    ax.grid(alpha=0.25)
+    return sampling_hz
+
+
 # %%
 def plot_best_run_psds(
-    performance, run_metrics, servo_mode, discard_samples, discard_reason
+    performance,
+    run_metrics,
+    servo_mode,
+    discard_samples,
+    discard_reason,
+    bump_results=None,
 ):
     best_five = sorted(run_metrics)[:5]
     if not best_five:
@@ -278,16 +389,13 @@ def plot_best_run_psds(
 
     for rank, (mean_rms_nm, run_number, start, end) in enumerate(best_five, start=1):
         rows = performance.iloc[start : end + 1]
-        psd_rows = rows.iloc[discard_samples:]
-        pd_tel_psd = ft_perf.measurement_array(psd_rows, "pd_tel")
-        sample_intervals = psd_rows["time"].diff().dt.total_seconds().iloc[1:]
-        sampling_hz = 1.0 / sample_intervals.median()
-        nfft = min(4096, 2 ** int(onp.log2(len(psd_rows))))
-
         fig, (ax_time, ax_psd) = plt.subplots(
             2, 1, figsize=(14, 8), constrained_layout=True
         )
         plot_pd_tel(ax_time, rows)
+        bump = bump_results.get(run_number) if bump_results is not None else None
+        if bump is not None:
+            plot_pd_tel_3_bump(ax_time, rows, bump)
         start_local = rows["time"].iloc[0].tz_convert(local_tz)
         end_local = rows["time"].iloc[-1].tz_convert(local_tz)
         ax_time.set_title(
@@ -296,34 +404,30 @@ def plot_best_run_psds(
         )
         ax_time.legend(ncol=4)
 
-        plt.sca(ax_psd)
-        for telescope in range(pd_tel_psd.shape[1]):
-            plt.psd(
-                pd_tel_psd[:, telescope],
-                NFFT=nfft,
-                Fs=sampling_hz,
-                noverlap=nfft // 2,
-                detrend="mean",
-                scale_by_freq=True,
-                label=f"pd_tel_{telescope + 1}",
-            )
-        ax_psd.set_title(
-            f"PSD after discarding {discard_samples:,} {discard_reason} samples"
+        plot_pd_tel_psd(
+            ax_psd,
+            rows,
+            discard_samples,
+            f"PSD after discarding {discard_samples:,} {discard_reason} samples",
         )
-        ax_psd.set_xlabel("Frequency (Hz)")
-        ax_psd.set_ylabel("PSD (dB K1 waves²/Hz)")
-        ax_psd.legend(ncol=4)
-        ax_psd.grid(alpha=0.25)
+        rms_label = (
+            mode_1_rms_label(mean_rms_nm, bump)
+            if bump is not None
+            else f"Mean pd_tel RMS {mean_rms_nm:.0f} nm"
+        )
         fig.suptitle(
-            f"Servo mode {servo_mode} — best #{rank}: "
-            f"mean pd_tel RMS after {discard_samples:,} "
-            f"{discard_reason} samples {mean_rms_nm:.0f} nm"
+            f"Servo mode {servo_mode} — best #{rank}: {rms_label} "
+            f"(after {discard_samples:,} {discard_reason} samples)"
         )
         print(
             f"Servo mode {servo_mode} best #{rank}: run {run_number}, "
-            f"mean RMS after {discard_samples:,} {discard_reason} "
-            f"samples {mean_rms_nm:.0f} nm"
+            f"{rms_label} after {discard_samples:,} {discard_reason} samples"
         )
+        if bump is not None and bump["onset"] is not None:
+            print(
+                f"  Bump onset: "
+                f"{rows['time'].iloc[bump['onset']].tz_convert(local_tz)}"
+            )
 
     plt.show()
     return best_five
@@ -335,6 +439,14 @@ best_five = plot_best_run_psds(
 
 # %%
 mode_1_bounds = find_mode_runs(performance_zoom, 1, min_samples)
+mode_1_bumps = {}
+for number, (start, end) in enumerate(mode_1_bounds, start=1):
+    rows = performance_zoom.iloc[start : end + 1]
+    values = ft_perf.measurement_array(rows, "pd_tel")
+    mode_1_bumps[number] = detect_pd_tel_3_bump(
+        rows, values, mode_1_discard_samples
+    )
+
 mode_1_metrics = plot_mode_mega(
     performance_zoom,
     1,
@@ -342,11 +454,64 @@ mode_1_metrics = plot_mode_mega(
     min_samples,
     mode_1_discard_samples,
     "loop-closing",
+    mode_1_bumps,
 )
 
 # %%
 best_mode_1 = plot_best_run_psds(
-    performance_zoom, mode_1_metrics, 1, mode_1_discard_samples, "loop-closing"
+    performance_zoom,
+    mode_1_metrics,
+    1,
+    mode_1_discard_samples,
+    "loop-closing",
+    mode_1_bumps,
 )
+
+# %%
+mode_4_bounds = [
+    (start, end)
+    for start, end in find_mode_runs(performance_zoom, 4, 1)
+    if start > 0 and end < len(performance_zoom) - 1
+]
+if not mode_4_bounds:
+    raise ValueError("No interior servo_mode=4 run in the selected interval")
+
+mode_4_start, mode_4_end = max(
+    mode_4_bounds,
+    key=lambda bounds: (
+        performance_zoom["time"].iloc[bounds[1]]
+        - performance_zoom["time"].iloc[bounds[0]]
+    ),
+)
+mode_4_run = performance_zoom.iloc[mode_4_start : mode_4_end + 1]
+mode_4_values = ft_perf.measurement_array(mode_4_run, "pd_tel")
+mode_4_rms_nm = mean_pd_tel_rms_nm(mode_4_values, 0)
+mode_4_local_start = mode_4_run["time"].iloc[0].tz_convert(local_tz)
+mode_4_local_end = mode_4_run["time"].iloc[-1].tz_convert(local_tz)
+
+fig, (ax_time, ax_psd) = plt.subplots(
+    2, 1, figsize=(14, 8), constrained_layout=True
+)
+plot_pd_tel(ax_time, mode_4_run)
+ax_time.set_title(
+    f"Longest interior servo_mode=4 run: "
+    f"{mode_4_local_start:%H:%M:%S}–{mode_4_local_end:%H:%M:%S} "
+    f"({len(mode_4_run):,} samples)"
+)
+ax_time.legend(ncol=4)
+mode_4_sampling_hz = plot_pd_tel_psd(
+    ax_psd, mode_4_run, 0, "PSD of the full servo-off run"
+)
+fig.suptitle(
+    f"Servo mode 4 — mean pd_tel RMS over all four telescopes: "
+    f"{mode_4_rms_nm:.0f} nm (full run, no samples discarded)"
+)
+print(
+    f"Longest interior servo_mode=4 run: {len(mode_4_run):,} samples, "
+    f"{mode_4_local_start} to {mode_4_local_end}; "
+    f"mean pd_tel RMS {mode_4_rms_nm:.0f} nm, "
+    f"PSD sampling rate {mode_4_sampling_hz:.1f} Hz"
+)
+plt.show()
 
 # %%
