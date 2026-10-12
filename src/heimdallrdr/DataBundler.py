@@ -6,6 +6,8 @@ import warnings
 import bisect
 import tqdm.auto as tqdm
 
+from ._timestamps import coerce_utc_datetime, parse_camera_timestamp
+
 
 class DataBundler:
     def __init__(self, base_path):
@@ -21,9 +23,7 @@ class DataBundler:
 
     def _coerce_utc_naive(self, value):
         """Convert datetimes to naive UTC for internal comparisons."""
-        if value.tzinfo is None:
-            return value
-        return value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return coerce_utc_datetime(value).replace(tzinfo=None)
 
     def _extract_camera_settings(self, header):
         """Extract camera settings used to check consistency across files.
@@ -202,21 +202,17 @@ class DataBundler:
 
         for day, date_dir in relevant_dirs:
             file_entries = []
-            for file in sorted(date_dir.glob(f"{crop}_T*.fits")):
-                try:
-                    time_str = file.stem.split("_T", 1)[1]
-                    time_of_day = datetime.datetime.strptime(
-                        time_str, "%H_%M_%S.%f"
-                    ).time()
-                except (IndexError, ValueError):
+            for file in date_dir.glob(f"{crop}_*.fits"):
+                stamp = parse_camera_timestamp(file.name, day)
+                if stamp is None:
                     continue
-
-                file_time = datetime.datetime.combine(day, time_of_day)
+                file_time = stamp.replace(tzinfo=None)
                 file_entries.append((file_time, file))
 
             if not file_entries:
                 continue
 
+            file_entries.sort()
             file_times = [t for t, _ in file_entries]
             left = max(0, bisect.bisect_left(file_times, start_time) - 1)
             right = bisect.bisect_right(file_times, end_time)

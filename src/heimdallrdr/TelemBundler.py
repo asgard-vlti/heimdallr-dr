@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
 
+from ._timestamps import utc_timestamp
+
 
 def load_ttmet(fname, start_time=None, end_time=None):
     """
@@ -31,27 +33,20 @@ def load_ttmet(fname, start_time=None, end_time=None):
 
     Optional start_time/end_time bounds can be supplied to only materialize rows
     in the requested interval. When bounds are provided, the parser streams the
-    file and avoids storing rows outside the window.
+    file and avoids storing rows outside the window. Naive datetime bounds are
+    interpreted as UTC; numeric bounds are Unix seconds.
     """
 
     # Accept either a path-like or a string
     p = pathlib.Path(fname)
 
-    # convert start_time and end_time to seconds to compare directly with the timestamps in the file
-    if start_time is not None:
-        if isinstance(start_time, datetime.datetime):
-            start_time_sec = start_time.timestamp()
-        else:
-            start_time_sec = float(start_time)
-    else:
-        start_time_sec = None
-    if end_time is not None:
-        if isinstance(end_time, datetime.datetime):
-            end_time_sec = end_time.timestamp()
-        else:
-            end_time_sec = float(end_time)
-    else:
-        end_time_sec = None
+    # Convert bounds to Unix seconds independently of the machine timezone.
+    start_time_sec = (
+        utc_timestamp(start_time) if start_time is not None else None
+    )
+    end_time_sec = (
+        utc_timestamp(end_time) if end_time is not None else None
+    )
 
     data = {"time": [], "tx": [], "ty": [], "mx": [], "my": []}
 

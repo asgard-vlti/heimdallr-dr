@@ -11,26 +11,11 @@ There are 2 blocks:
 04:12:11.740 04:20:21.790
 """
 from glob import glob
+from _script_timestamps import parse_time_seconds_and_str as _parse_time_seconds_and_str
 # Minimum delta time to define a block
 delta_time = 20.0  
 
-all_files = sorted(glob('locked/hei_k2_T*.fits'))
-from datetime import datetime
-import os
-import re
-
-def _parse_time_seconds_and_str(path: str):
-    base = os.path.basename(path)
-    m = re.search(r'T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)', base)
-    if not m:
-        return None
-    tstr = m.group(1)
-    try:
-        dt = datetime.strptime(tstr, '%H:%M:%S.%f')
-    except ValueError:
-        dt = datetime.strptime(tstr, '%H:%M:%S')
-    sec = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1e6
-    return sec, tstr
+all_files = sorted(glob('locked/hei_k2_*.fits'))
 
 # Extract times (in seconds since midnight) and their string forms
 times = []

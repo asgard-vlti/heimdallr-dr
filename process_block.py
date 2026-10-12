@@ -5,10 +5,8 @@ V^2 and closure phases.
 import numpy as np
 import matplotlib.pyplot as plt
 from glob import glob
-from datetime import datetime
-import re
-import os
 from astropy.io import fits
+from _script_timestamps import parse_time_seconds_and_str as _parse_time_seconds_and_str
 plt.ion()
 
 #---- Inputs ----
@@ -99,20 +97,6 @@ bl2beam = np.array([[0,1],
                     [1,3],
                     [2,3]]).astype(int)
 
-#---- Helper to parse time from filenames or strings ----
-def _parse_time_seconds_and_str(path: str):
-    base = os.path.basename(path)
-    m = re.search(r'T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)', base)
-    if not m:
-        return None
-    tstr = m.group(1)
-    try:
-        dt = datetime.strptime(tstr, '%H:%M:%S.%f')
-    except ValueError:
-        dt = datetime.strptime(tstr, '%H:%M:%S')
-    sec = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1e6
-    return sec, tstr
-
 # Remove top-level single-block processing. Wrap it into a function instead.
 def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = None):
     # Parse the requested time range for this block
@@ -120,7 +104,10 @@ def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = N
     tstop_sec = _parse_time_seconds_and_str("T" + tstop)[0]
 
     # Determine files for this block
-    k1_files = sorted(glob(dir_path + "hei_k1*.fits"))
+    k1_files = sorted(
+        glob(dir_path + "hei_k1*.fits"),
+        key=lambda path: (_parse_time_seconds_and_str(path) or (float("inf"), ""))[0],
+    )
     k2_files = sorted(glob(dir_path + "hei_k2*.fits"))
 
     # --- Begin existing block processing (was top-level code) ---
@@ -130,9 +117,10 @@ def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = N
     fluxes_k1 = []
     fluxes_k2 = []
     for fn in k1_files:
-        t_sec, t_str = _parse_time_seconds_and_str(fn)
-        if t_sec is None:
+        parsed = _parse_time_seconds_and_str(fn)
+        if parsed is None:
             continue
+        t_sec, t_str = parsed
         if tstart_sec <= t_sec <= tstop_sec:
             print(f"Initial Processing file: {fn} at time {t_str}")
             dd = fits.getdata(fn)

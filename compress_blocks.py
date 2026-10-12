@@ -3,17 +3,16 @@ import os
 import shutil
 import tarfile
 from pathlib import Path
-import re
+from _script_timestamps import parse_time_seconds_and_str
 
 
 def parse_time(filename):
     """
-    Extracts time string HHMMSS from filename.
-    Format expected: .*_T(\d{6})\..*\.fits
+    Extracts time string HHMMSS from supported camera filename formats.
     """
-    match = re.search(r"_T(\d{6})", filename)
-    if match:
-        return match.group(1)
+    parsed = parse_time_seconds_and_str(filename)
+    if parsed is not None:
+        return parsed[1].split(".", 1)[0].replace(":", "")
     return None
 
 

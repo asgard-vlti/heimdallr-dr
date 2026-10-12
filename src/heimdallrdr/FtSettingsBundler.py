@@ -7,6 +7,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from ._timestamps import coerce_utc_datetime
+
 
 @dataclass
 class FringeSettingsFile:
@@ -54,12 +56,7 @@ class FTSettingsBundler:
 
     @staticmethod
     def _coerce_utc_datetime(value):
-        if isinstance(value, datetime.datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=datetime.timezone.utc)
-            return value.astimezone(datetime.timezone.utc)
-
-        return datetime.datetime.fromtimestamp(float(value), datetime.timezone.utc)
+        return coerce_utc_datetime(value)
 
     @classmethod
     def _line_to_datetime(cls, line: str, file_dt: Optional[datetime.datetime]):
