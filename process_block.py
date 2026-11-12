@@ -390,6 +390,8 @@ def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = N
                          ft2[q1_K2[i], p1_K2[i]]*(dp_K2[i])*(dq_K2[i])
             V2[count, i] /= ft2[szx//2, szy//2]
 
+    #import pdb; pdb.set_trace()
+
     # Compute V^2. 
     V2_1 = np.abs(V1)**2
     V2_2 = np.abs(V2)**2
@@ -497,17 +499,17 @@ def process_block(tstart: str, tstop: str, dir_path: str, target: str | None = N
     }
 
 # --- Loop through all observations ---
-results = []
-for target, tstart, tstop in obs:
-    print(f"Processing block: {target} {tstart}-{tstop}")
-    try:
-        out = process_block(tstart, tstop, dir, target=target)
-        results.append({
-            "target": target,
-            "tstart": tstart,
-            "tstop": tstop,
-            **out
-        })
-    except Exception as e:
-        print(f"Failed block {target} {tstart}-{tstop}: {e}")
-# Optionally, results now contains per-block outputs
+if __name__ == "__main__":
+    results = []
+    for target, tstart, tstop in obs:
+        print(f"Processing block: {target} {tstart}-{tstop}")
+        try:
+            out = process_block(tstart, tstop, dir, target=target)
+            results.append({
+                "target": target,
+                "tstart": tstart,
+                "tstop": tstop,
+                **out
+            })
+        except Exception as e:
+            print(f"Failed block {target} {tstart}-{tstop}: {e}")
