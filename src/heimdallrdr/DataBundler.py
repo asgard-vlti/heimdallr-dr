@@ -1,10 +1,10 @@
 import numpy as np
-from astropy.io import fits
 import pathlib
 import datetime
 import warnings
 import bisect
 import tqdm.auto as tqdm
+from ._fits import inspect_cube, read_cube_batches
 
 
 class DataBundler:
@@ -49,7 +49,7 @@ class DataBundler:
         return {
             "fps": _first_present(("FPS", "FRAMERATE", "FRAME_RATE")),
             "readout_mode": _first_present(
-                ("READMODE", "READOUT", "READOUT_MODE", "RDOUTMOD")
+                ("RO_MODE", "READMODE", "READOUT", "READOUT_MODE", "RDOUTMOD")
             ),
             "camera_gain": _first_present(("GAIN", "CAMGAIN", "CAM_GAIN")),
         }
@@ -251,45 +251,29 @@ class DataBundler:
 
         for file_time, file in self._iter_candidate_files(crop, start_time, end_time):
             try:
-                with fits.open(file) as data:
-                    hdu = data[1]  # type: ignore[index]
-                    header = hdu.header  # type: ignore[attr-defined]
-                    cube = hdu.data  # type: ignore[attr-defined]
-
-                    if cube is None:
-                        continue
-
-                    settings = self._extract_camera_settings(header)
-                    fps_value = settings.get("fps")
-                    try:
-                        fps = float(fps_value) if fps_value is not None else None
-                    except (TypeError, ValueError):
-                        fps = None
-
-                    if fps is None or fps <= 0:
-                        raise ValueError(
-                            f"Invalid or missing FPS in {file}: {fps_value}. "
-                            "Cannot compute partial cube overlap."
-                        )
-
-                    overlap = self._cube_overlap_slice(
-                        cube_start=file_time,
-                        n_frames=cube.shape[0],
-                        fps=fps,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                    if overlap is None:
-                        continue
-
-                    start_idx, end_idx = overlap
-                    settings_by_file.append((file_time, settings))
-                    overlap_plan.append((file_time, file, start_idx, end_idx, fps))
+                cube = inspect_cube(file, filename_time=file_time)
+                settings = self._extract_camera_settings(cube.header)
+                overlap = self._cube_overlap_slice(
+                    cube_start=file_time, n_frames=cube.shape[0], fps=cube.fps,
+                    start_time=start_time, end_time=end_time,
+                )
+                if overlap is None:
+                    continue
+                start_idx, end_idx = overlap
+                settings_by_file.append((file_time, settings))
+                overlap_plan.append((file_time, file, start_idx, end_idx, cube.fps))
             except Exception as e:
                 print(f"Error loading {file}: {e}")
 
         overlap_plan.sort(key=lambda x: x[0])
         return overlap_plan, settings_by_file
+
+    def _planned_cube(self, file_time, file, start_idx, end_idx):
+        """Use shared lazy cube reading with the legacy overlap plan."""
+        from dataclasses import replace
+
+        cube = inspect_cube(file, filename_time=file_time)
+        return replace(cube, first=start_idx, stop=end_idx)
 
     def load_between(
         self, crop: str, start_time: datetime.datetime, end_time: datetime.datetime
@@ -328,21 +312,15 @@ class DataBundler:
             overlap_plan, desc="Loading frames"
         ):
             try:
-                with fits.open(file) as data:
-                    hdu = data[1]  # type: ignore[index]
-                    cube = hdu.data  # type: ignore[attr-defined]
-                    if cube is None:
-                        continue
-
-                    frame_slice = cube[start_idx:end_idx]
-                    if frame_slice.shape[0] == 0:
-                        continue
-
-                    frame_times_slice = self._frame_times_for_slice(
-                        file_time, start_idx, end_idx, fps
-                    )
-                    times_used.append(file_time)
-                    selected.append((file_time, frame_slice, frame_times_slice))
+                cube = self._planned_cube(file_time, file, start_idx, end_idx)
+                frame_slice = np.concatenate([
+                    frames for _, frames in read_cube_batches(cube)
+                ])
+                frame_times_slice = self._frame_times_for_slice(
+                    file_time, start_idx, end_idx, fps
+                )
+                times_used.append(file_time)
+                selected.append((file_time, frame_slice, frame_times_slice))
             except Exception as e:
                 print(f"Error loading {file}: {e}")
 
@@ -403,32 +381,17 @@ class DataBundler:
             overlap_plan, desc="Processing frames"
         ):
             try:
-                with fits.open(file) as data:
-                    hdu = data[1]  # type: ignore[index]
-                    cube = hdu.data  # type: ignore[attr-defined]
-                    if cube is None:
-                        continue
-
-                    frame_slice = cube[start_idx:end_idx]
-                    n_frames = frame_slice.shape[0]
-                    if n_frames == 0:
-                        continue
-
-                    frame_times_chunk = self._frame_times_for_slice(
-                        file_time, start_idx, end_idx, fps
-                    )
-
-                    first_out = fn(frame_slice[0])
-                    first_arr = np.asarray(first_out)
-                    out_shape = (n_frames,) + first_arr.shape
-                    out_chunk = np.empty(out_shape, dtype=first_arr.dtype)
-                    out_chunk[0] = first_arr
-                    for i in range(1, n_frames):
-                        out_chunk[i] = np.asarray(fn(frame_slice[i]))
-
-                    times_used.append(file_time)
-                    frame_times_chunks.append(frame_times_chunk)
-                    results_chunks.append(out_chunk)
+                cube = self._planned_cube(file_time, file, start_idx, end_idx)
+                outputs = []
+                for _, frames in read_cube_batches(cube):
+                    outputs.extend(np.asarray(fn(frame)) for frame in frames)
+                out_chunk = np.stack(outputs)
+                frame_times_chunk = self._frame_times_for_slice(
+                    file_time, start_idx, end_idx, fps
+                )
+                times_used.append(file_time)
+                frame_times_chunks.append(frame_times_chunk)
+                results_chunks.append(out_chunk)
             except Exception as e:
                 print(f"Error applying function to {file}: {e}")
 
